@@ -1,243 +1,407 @@
+#!/usr/bin/env python3
 """
-图片质量检测工具
-===============
-用法: 把这个脚本放到你的素材文件夹里，双击运行
-或者命令行: python check_image_quality.py [文件夹路径]
-
-它会检测每张图片的:
-- 真实文件格式（不看扩展名，看实际二进制数据）
-- 实际分辨率
-- 如果是JPEG，估算压缩质量
-- 文件大小
-- 是否存在"扩展名与实际格式不符"的问题
+Image Quality Checker CLI with i18n support
+============================================
+Command-line interface that uses image_quality_core.py for checking images.
+Supports English and Chinese localization for human-readable output.
+JSON/CSV output keys remain in English for automation compatibility.
 """
 
+import argparse
+import csv
+import json
+import locale
 import os
 import sys
 from pathlib import Path
 
 try:
-    from PIL import Image
+    import image_quality_core as core
 except ImportError:
-    print("需要安装 Pillow 库，请运行: pip install Pillow")
-    input("按回车退出...")
-    sys.exit(1)
+    print("ERROR: Cannot import image_quality_core.py - ensure it's in the same directory")
+    sys.exit(2)
 
 
-def get_real_format(filepath):
-    """通过读取文件头判断真实格式"""
-    with open(filepath, 'rb') as f:
-        header = f.read(16)
-    
-    if header[:3] == b'\xff\xd8\xff':
-        return "JPEG"
-    elif header[:4] == b'\x89PNG':
-        return "PNG"
-    elif header[:4] == b'RIFF' and header[8:12] == b'WEBP':
-        return "WEBP"
-    elif header[:2] == b'BM':
-        return "BMP"
-    elif header[:4] in (b'II\x2a\x00', b'MM\x00\x2a'):
-        return "TIFF"
-    else:
-        return f"未知 (hex: {header[:8].hex()})"
+# ── Localization dictionaries ────────────────────────────────────────
 
-
-def estimate_jpeg_quality(img):
-    """通过量化表估算JPEG压缩质量"""
-    if not hasattr(img, 'quantization') or not img.quantization:
-        return None, None
-    
-    q0 = img.quantization[0]
-    avg = sum(q0[i] for i in range(min(8, len(q0)))) / min(8, len(q0))
-    
-    if avg <= 1.5:
-        return "95-100 (极高 - 几乎无损)", avg
-    elif avg <= 3:
-        return "90-95 (很高 - 优秀)", avg
-    elif avg <= 5:
-        return "85-90 (高 - 商用合格)", avg
-    elif avg <= 8:
-        return "75-85 (中高)", avg
-    elif avg <= 16:
-        return "60-75 (中等 - 有明显压缩痕迹)", avg
-    else:
-        return "<60 (低 - 不适合商用)", avg
-
-
-def check_image(filepath):
-    """检测单个图片文件"""
-    file_size = os.path.getsize(filepath)
-    filename = os.path.basename(filepath)
-    extension = Path(filepath).suffix.lower()
-    real_format = get_real_format(filepath)
-    
-    # 检查扩展名与实际格式是否匹配
-    format_map = {
-        '.jpg': 'JPEG', '.jpeg': 'JPEG',
-        '.png': 'PNG',
-        '.webp': 'WEBP',
-        '.bmp': 'BMP',
-        '.tiff': 'TIFF', '.tif': 'TIFF'
+MESSAGES = {
+    'en': {
+        'title': 'Image Quality Check Report',
+        'scan_path': 'Scan path',
+        'files_checked': 'Files checked',
+        'filename': 'File',
+        'resolution': 'Resolution',
+        'file_size': 'File size',
+        'color_mode': 'Color mode',
+        'extension': 'Extension',
+        'real_format': 'Real format',
+        'jpeg_quality': 'JPEG quality',
+        'genuine_png': '✅ Genuine PNG lossless format',
+        'uncompressed_size': 'Uncompressed size',
+        'warning_format_mismatch': '⚠️  Warning: Extension is {ext} but actual format is {fmt}!',
+        'warning_format_mismatch_short': 'Format mismatch',
+        'warning_low_jpeg': '⚠️  JPEG quality is low',
+        'warning_low_resolution': '⚠️  Resolution is low, recommend at least {min_w}x{min_h} for commercial use',
+        'error_cannot_open': '❌ {filename}: Cannot open - {error}',
+        'error_cannot_open_short': 'Cannot open',
+        'summary': 'Summary',
+        'warnings_found': '⚠️  Found {count} issue(s):',
+        'recommend_fix': 'Recommendation: Fix the above issues before publishing.',
+        'all_passed': '✅ All files passed checks, ready for commercial use.',
+        'report_saved': '📋 Report saved to: {path}',
+        'report_save_failed': '(Report save failed: {error})',
+        'no_files': 'No image files found in {folder}',
+        'path_not_exist': 'Path does not exist: {path}',
+        'press_enter': '\nPress Enter to exit...',
+        'pillow_required': 'Pillow library is required, please run: pip install Pillow',
+    },
+    'zh': {
+        'title': '图片质量检测报告',
+        'scan_path': '扫描路径',
+        'files_checked': '检测文件数',
+        'filename': '文件',
+        'resolution': '分辨率',
+        'file_size': '文件大小',
+        'color_mode': '颜色模式',
+        'extension': '扩展名',
+        'real_format': '实际格式',
+        'jpeg_quality': 'JPEG质量',
+        'genuine_png': '✅ 真正的PNG无损格式',
+        'uncompressed_size': '未压缩大小',
+        'warning_format_mismatch': '⚠️  警告: 扩展名是 {ext} 但实际是 {fmt}!',
+        'warning_format_mismatch_short': '格式不匹配',
+        'warning_low_jpeg': '⚠️  JPEG质量偏低',
+        'warning_low_resolution': '⚠️  分辨率偏低，建议商用素材至少 {min_w}x{min_h}',
+        'error_cannot_open': '❌ {filename}: 无法打开 - {error}',
+        'error_cannot_open_short': '无法打开',
+        'summary': '汇总',
+        'warnings_found': '⚠️  发现 {count} 个问题:',
+        'recommend_fix': '建议: 在上架销售前解决以上问题。',
+        'all_passed': '✅ 所有文件检测通过，可以用于商用素材包。',
+        'report_saved': '📋 报告已保存到: {path}',
+        'report_save_failed': '(报告保存失败: {error})',
+        'no_files': '在 {folder} 中没有找到图片文件',
+        'path_not_exist': '路径不存在: {path}',
+        'press_enter': '\n按回车退出...',
+        'pillow_required': '需要安装 Pillow 库，请运行: pip install Pillow',
     }
-    expected_format = format_map.get(extension, "未知")
-    format_mismatch = (expected_format != real_format)
+}
+
+
+# ── Language detection ───────────────────────────────────────────────
+
+def detect_language(args_lang=None):
+    """
+    Determine language with precedence:
+    1. --lang argument
+    2. IQC_LANG environment variable
+    3. System locale (basic detection)
+    4. Default: zh (Chinese)
+    """
+    # Priority 1: CLI argument
+    if args_lang:
+        return args_lang
     
+    # Priority 2: Environment variable
+    env_lang = os.environ.get('IQC_LANG', '').lower()
+    if env_lang in ('en', 'zh'):
+        return env_lang
+    
+    # Priority 3: System locale
     try:
-        img = Image.open(filepath)
-    except Exception as e:
-        return {
-            'filename': filename,
-            'error': str(e)
-        }
+        # Use locale.getlocale() to avoid deprecation warning
+        system_locale = locale.getlocale()[0]
+        if system_locale:
+            if system_locale.startswith('zh') or system_locale.startswith('ZH'):
+                return 'zh'
+            # For most other locales, default to English
+            if system_locale.startswith('en') or system_locale.startswith('EN'):
+                return 'en'
+    except Exception:
+        pass
     
-    result = {
-        'filename': filename,
-        'extension': extension,
-        'real_format': real_format,
-        'format_mismatch': format_mismatch,
-        'width': img.size[0],
-        'height': img.size[1],
-        'mode': img.mode,
-        'file_size_mb': file_size / 1024 / 1024,
-        'file_size_bytes': file_size,
-    }
+    # Priority 4: Check LANG environment variable as fallback
+    lang_env = os.environ.get('LANG', '').lower()
+    if 'zh' in lang_env:
+        return 'zh'
+    if 'en' in lang_env:
+        return 'en'
     
-    if real_format == "JPEG":
-        quality_est, avg_val = estimate_jpeg_quality(img)
-        result['jpeg_quality'] = quality_est
-        result['jpeg_q_avg'] = avg_val
-    
-    if real_format == "PNG":
-        channels = 4 if img.mode == 'RGBA' else 3
-        raw_size = img.size[0] * img.size[1] * channels
-        result['is_genuine_png'] = True
-        result['uncompressed_size_mb'] = raw_size / 1024 / 1024
-    
-    return result
+    # Default: Chinese
+    return 'zh'
 
 
-def main():
-    # 确定要扫描的文件夹
-    if len(sys.argv) > 1:
-        folder = sys.argv[1]
-    else:
-        folder = os.path.dirname(os.path.abspath(__file__))
-    
-    if not os.path.isdir(folder):
-        # 如果传入的是文件而不是文件夹
-        if os.path.isfile(folder):
-            results = [check_image(folder)]
-            folder = os.path.dirname(folder)
-        else:
-            print(f"路径不存在: {folder}")
-            input("按回车退出...")
-            return
-    else:
-        # 扫描文件夹中的所有图片
-        extensions = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif'}
-        files = [
-            os.path.join(folder, f) 
-            for f in sorted(os.listdir(folder)) 
-            if Path(f).suffix.lower() in extensions
-        ]
-        
-        if not files:
-            print(f"在 {folder} 中没有找到图片文件")
-            input("按回车退出...")
-            return
-        
-        results = [check_image(f) for f in files]
-    
-    # 输出报告
+def msg(key, lang='en', **kwargs):
+    """Get localized message with optional formatting."""
+    text = MESSAGES.get(lang, MESSAGES['en']).get(key, key)
+    if kwargs:
+        return text.format(**kwargs)
+    return text
+
+
+# ── Output functions ─────────────────────────────────────────────────
+
+def output_human_readable(results, warnings, folder, lang):
+    """Print human-readable report to console."""
     print("=" * 70)
-    print(f"  图片质量检测报告")
-    print(f"  扫描路径: {folder}")
-    print(f"  检测文件数: {len(results)}")
+    print(f"  {msg('title', lang)}")
+    print(f"  {msg('scan_path', lang)}: {folder}")
+    print(f"  {msg('files_checked', lang)}: {len(results)}")
     print("=" * 70)
-    
-    warnings = []
     
     for r in results:
         if 'error' in r:
-            print(f"\n❌ {r['filename']}: 无法打开 - {r['error']}")
+            print(msg('error_cannot_open', lang, filename=r['filename'], error=r['error']))
             continue
         
         print(f"\n{'─' * 50}")
         print(f"📄 {r['filename']}")
-        print(f"   分辨率:     {r['width']} x {r['height']} 像素")
-        print(f"   文件大小:   {r['file_size_mb']:.2f} MB ({r['file_size_bytes']:,} bytes)")
-        print(f"   颜色模式:   {r['mode']}")
-        print(f"   扩展名:     {r['extension']}")
-        print(f"   实际格式:   {r['real_format']}")
+        print(f"   {msg('resolution', lang)}:     {r['width']} x {r['height']} 像素" if lang == 'zh' else f"   {msg('resolution', lang)}:     {r['width']} x {r['height']} pixels")
+        print(f"   {msg('file_size', lang)}:   {r['file_size_mb']:.2f} MB ({r['file_size_bytes']:,} bytes)")
+        print(f"   {msg('color_mode', lang)}:   {r['mode']}")
+        print(f"   {msg('extension', lang)}:     {r['extension']}")
+        print(f"   {msg('real_format', lang)}:   {r['real_format']}")
         
-        # 格式不匹配警告
-        if r['format_mismatch']:
-            print(f"   ⚠️  警告: 扩展名是 {r['extension']} 但实际是 {r['real_format']}!")
-            warnings.append(f"{r['filename']}: 假{r['extension']}，实际是{r['real_format']}")
+        # Format mismatch warning
+        if r.get('format_mismatch'):
+            print(f"   {msg('warning_format_mismatch', lang, ext=r['extension'], fmt=r['real_format'])}")
         
-        # JPEG质量
-        if r.get('jpeg_quality'):
-            print(f"   JPEG质量:   {r['jpeg_quality']}")
-            if r.get('jpeg_q_avg', 999) > 8:
-                warnings.append(f"{r['filename']}: JPEG质量偏低 ({r['jpeg_quality']})")
+        # JPEG quality
+        if r.get('jpeg_quality_label'):
+            print(f"   {msg('jpeg_quality', lang)}:   {r['jpeg_quality_label']}")
         
-        # PNG信息
-        if r.get('is_genuine_png'):
-            print(f"   ✅ 真正的PNG无损格式")
-            print(f"   未压缩大小: {r['uncompressed_size_mb']:.1f} MB")
-        
-        # 分辨率检查
-        if r['width'] < 3000 or r['height'] < 3000:
-            print(f"   ⚠️  分辨率偏低，建议商用素材至少 4000x4000")
-            warnings.append(f"{r['filename']}: 分辨率 {r['width']}x{r['height']} 偏低")
+        # PNG info
+        if r.get('png_genuine'):
+            print(f"   {msg('genuine_png', lang)}")
+            print(f"   {msg('uncompressed_size', lang)}: {r['png_uncompressed_mb']:.1f} MB")
     
-    # 汇总
+    # Summary
     print(f"\n{'=' * 70}")
-    print(f"  汇总")
+    print(f"  {msg('summary', lang)}")
     print(f"{'=' * 70}")
     
     if warnings:
-        print(f"\n⚠️  发现 {len(warnings)} 个问题:")
+        print(f"\n{msg('warnings_found', lang, count=len(warnings))}")
         for w in warnings:
-            print(f"   • {w}")
-        print(f"\n建议: 在上架销售前解决以上问题。")
+            display = f"{w['filename']}: {w['message']}"
+            print(f"   • {display}")
+        print(f"\n{msg('recommend_fix', lang)}")
     else:
-        print(f"\n✅ 所有文件检测通过，可以用于商用素材包。")
+        print(f"\n{msg('all_passed', lang)}")
+
+
+def output_json(results):
+    """Print JSON output to stdout (keys in English)."""
+    print(json.dumps(results, indent=2, ensure_ascii=False))
+
+
+def output_csv(results):
+    """Print CSV output to stdout (keys in English)."""
+    if not results:
+        return
     
-    # 保存报告到文件
+    # Determine all possible keys
+    all_keys = set()
+    for r in results:
+        all_keys.update(r.keys())
+    
+    fieldnames = sorted(all_keys)
+    writer = csv.DictWriter(sys.stdout, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(results)
+
+
+def write_report_file(results, warnings, folder, lang):
+    """Write quality_report.txt in the scanned folder."""
     report_path = os.path.join(folder, "quality_report.txt")
     try:
         with open(report_path, 'w', encoding='utf-8') as f:
-            f.write(f"图片质量检测报告\n")
-            f.write(f"扫描路径: {folder}\n")
-            f.write(f"检测文件数: {len(results)}\n\n")
+            f.write(f"{msg('title', lang)}\n")
+            f.write(f"{msg('scan_path', lang)}: {folder}\n")
+            f.write(f"{msg('files_checked', lang)}: {len(results)}\n\n")
+            
             for r in results:
                 if 'error' in r:
-                    f.write(f"{r['filename']}: 错误 - {r['error']}\n")
+                    f.write(f"{r['filename']}: {msg('error_cannot_open_short', lang)} - {r['error']}\n")
                     continue
+                
                 f.write(f"{r['filename']}\n")
-                f.write(f"  分辨率: {r['width']}x{r['height']}\n")
-                f.write(f"  大小: {r['file_size_mb']:.2f} MB\n")
-                f.write(f"  扩展名: {r['extension']} / 实际: {r['real_format']}\n")
-                if r['format_mismatch']:
-                    f.write(f"  ⚠️ 格式不匹配!\n")
-                if r.get('jpeg_quality'):
-                    f.write(f"  JPEG质量: {r['jpeg_quality']}\n")
-                if r.get('is_genuine_png'):
-                    f.write(f"  ✅ 真正PNG\n")
+                f.write(f"  {msg('resolution', lang)}: {r['width']}x{r['height']}\n")
+                f.write(f"  {msg('file_size', lang)}: {r['file_size_mb']:.2f} MB\n")
+                f.write(f"  {msg('extension', lang)}: {r['extension']} / {msg('real_format', lang)}: {r['real_format']}\n")
+                
+                if r.get('format_mismatch'):
+                    f.write(f"  ⚠️ {msg('warning_format_mismatch_short', lang)}!\n")
+                
+                if r.get('jpeg_quality_label'):
+                    f.write(f"  {msg('jpeg_quality', lang)}: {r['jpeg_quality_label']}\n")
+                
+                if r.get('png_genuine'):
+                    f.write(f"  {msg('genuine_png', lang)}\n")
+                
                 f.write(f"\n")
             
             if warnings:
-                f.write(f"\n问题汇总:\n")
+                f.write(f"\n{msg('summary', lang)}:\n")
                 for w in warnings:
-                    f.write(f"  • {w}\n")
+                    f.write(f"  • {w['filename']}: {w['message']}\n")
         
-        print(f"\n📋 报告已保存到: {report_path}")
+        print(f"\n{msg('report_saved', lang, path=report_path)}")
     except Exception as e:
-        print(f"\n(报告保存失败: {e})")
+        print(f"\n{msg('report_save_failed', lang, error=str(e))}")
+
+
+# ── Main CLI logic ───────────────────────────────────────────────────
+
+def parse_resolution(res_str):
+    """Parse resolution string like '1600x1600' into (width, height)."""
+    parts = res_str.lower().split('x')
+    if len(parts) != 2:
+        raise ValueError(f"Invalid resolution format: {res_str}")
+    return int(parts[0]), int(parts[1])
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Image Quality Checker - Batch check image files',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     
-    input("\n按回车退出...")
+    parser.add_argument(
+        'path',
+        nargs='?',
+        default=None,
+        help='Path to folder or single image file (default: current directory)'
+    )
+    parser.add_argument(
+        '--json',
+        action='store_true',
+        help='Output results as JSON (keys in English)'
+    )
+    parser.add_argument(
+        '--csv',
+        action='store_true',
+        help='Output results as CSV (keys in English)'
+    )
+    parser.add_argument(
+        '--min-resolution',
+        default='1600x1600',
+        help='Minimum resolution threshold (default: 1600x1600)'
+    )
+    parser.add_argument(
+        '--min-jpeg-quality',
+        type=float,
+        default=8.0,
+        help='Minimum JPEG quality average threshold (default: 8.0)'
+    )
+    parser.add_argument(
+        '-r', '--recursive',
+        action='store_true',
+        help='Scan folders recursively'
+    )
+    parser.add_argument(
+        '--no-report',
+        action='store_true',
+        help='Skip writing quality_report.txt'
+    )
+    parser.add_argument(
+        '--lang',
+        choices=['en', 'zh'],
+        help='Language for human-readable output (en=English, zh=Chinese)'
+    )
+    parser.add_argument(
+        '--pause',
+        action='store_true',
+        help='Pause at the end (useful for double-click runs)'
+    )
+    
+    args = parser.parse_args()
+    
+    # Determine language
+    lang = detect_language(args.lang)
+    
+    # Determine path to scan
+    if args.path:
+        target_path = args.path
+    else:
+        target_path = os.getcwd()
+    
+    target_path = os.path.abspath(target_path)
+    
+    # Parse resolution threshold
+    try:
+        min_width, min_height = parse_resolution(args.min_resolution)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(2)
+    
+    # Check if path exists
+    if not os.path.exists(target_path):
+        if not (args.json or args.csv):
+            print(msg('path_not_exist', lang, path=target_path))
+        if args.pause:
+            input(msg('press_enter', lang))
+        sys.exit(2)
+    
+    # Scan files
+    try:
+        if os.path.isfile(target_path):
+            # Single file
+            results = [core.check_image(target_path)]
+            folder = os.path.dirname(target_path)
+        elif os.path.isdir(target_path):
+            # Folder scan
+            results = core.scan_folder(target_path, recursive=args.recursive)
+            folder = target_path
+            
+            if not results:
+                if not (args.json or args.csv):
+                    print(msg('no_files', lang, folder=folder))
+                if args.pause:
+                    input(msg('press_enter', lang))
+                sys.exit(0)
+        else:
+            if not (args.json or args.csv):
+                print(msg('path_not_exist', lang, path=target_path))
+            if args.pause:
+                input(msg('press_enter', lang))
+            sys.exit(2)
+    except Exception as e:
+        print(f"Error scanning: {e}", file=sys.stderr)
+        if args.pause:
+            input(msg('press_enter', lang))
+        sys.exit(2)
+    
+    # Generate warnings with thresholds
+    warnings = core.generate_warnings(
+        results,
+        min_width=min_width,
+        min_height=min_height,
+        min_jpeg_quality_avg=args.min_jpeg_quality
+    )
+    
+    # Output based on format
+    if args.json:
+        output_json(results)
+    elif args.csv:
+        output_csv(results)
+    else:
+        # Human-readable output
+        output_human_readable(results, warnings, folder, lang)
+        
+        # Write report file
+        if not args.no_report:
+            write_report_file(results, warnings, folder, lang)
+    
+    # Pause if requested
+    if args.pause:
+        input(msg('press_enter', lang))
+    
+    # Exit code
+    if warnings:
+        sys.exit(1)
+    else:
+        sys.exit(0)
 
 
 if __name__ == "__main__":

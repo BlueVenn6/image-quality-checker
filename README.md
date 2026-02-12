@@ -136,9 +136,45 @@ python check_image_quality.py [PATH] --csv
 # Recursive scan
 python check_image_quality.py [PATH] -r
 
-# Custom thresholds
-python check_image_quality.py [PATH] --min-resolution 4000x4000 --min-jpeg-quality 5
+# Custom thresholds (default: 1600x1600)
+python check_image_quality.py [PATH] --min-resolution 1600x1600 --min-jpeg-quality 8.0
+
+# Pause at end (useful for double-click runs)
+python check_image_quality.py [PATH] --pause
 ```
+
+### Language Switching / 语言切换
+
+The CLI supports English and Chinese for human-readable output. JSON/CSV keys always remain in English for automation.
+
+**Language priority:**
+1. `--lang en` or `--lang zh` command-line flag
+2. `IQC_LANG` environment variable (set to `en` or `zh`)
+3. System locale detection
+4. Default: Chinese (zh)
+
+**Examples:**
+```bash
+# Force English output
+python check_image_quality.py [PATH] --lang en
+
+# Force Chinese output
+python check_image_quality.py [PATH] --lang zh
+
+# Use environment variable (Windows)
+set IQC_LANG=en
+python check_image_quality.py [PATH]
+
+# Use environment variable (Linux/macOS)
+export IQC_LANG=en
+python check_image_quality.py [PATH]
+```
+
+**Windows batch files:**
+- `run_windows_standard.bat` — Quick runner for drag-and-drop or double-click
+- `run_windows_lang.bat` — Interactive language selector with prompts
+
+**Important for Windows users:** When creating or editing .bat files, save them with **ANSI encoding** or **UTF-8 without BOM**. Files with UTF-8 BOM may cause `cmd.exe` to display garbled characters.
 
 ## MCP server (for AI agents)
 
