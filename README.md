@@ -121,6 +121,42 @@ python check_image_quality.py "/Users/yourname/images/test.jpg"
 image quality checker, jpeg quality estimate, format mismatch detector, magic bytes, file signature, batch image audit, Pillow
 
 ---
+## CLI usage
+
+```bash
+# Human-readable report (default)
+python check_image_quality.py [PATH]
+
+# JSON output (for scripts/CI)
+python check_image_quality.py [PATH] --json
+
+# CSV output
+python check_image_quality.py [PATH] --csv
+
+# Recursive scan
+python check_image_quality.py [PATH] -r
+
+# Custom thresholds
+python check_image_quality.py [PATH] --min-resolution 4000x4000 --min-jpeg-quality 5
+```
+
+## MCP server (for AI agents)
+
+Install MCP dependencies:
+
+```bash
+pip install -r requirements-mcp.txt
+```
+
+Run server (stdio transport):
+
+```bash
+python mcp_server.py
+```
+
+Exposed tools:
+- `image_quality_check_file` — check single image
+- `image_quality_scan_folder` — batch scan folder with thresholds
 
 ## License
 
