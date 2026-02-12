@@ -38,7 +38,8 @@ def detect_language(lang_flag: str = None) -> str:
     
     # Try system locale
     try:
-        sys_locale = locale.getdefaultlocale()[0]
+        # Use getlocale() instead of deprecated getdefaultlocale()
+        sys_locale = locale.getlocale()[0]
         if sys_locale:
             if sys_locale.startswith('en'):
                 return 'en'
