@@ -39,9 +39,11 @@ MESSAGES = {
         'genuine_png': '✅ Genuine PNG lossless format',
         'uncompressed_size': 'Uncompressed size',
         'warning_format_mismatch': '⚠️  Warning: Extension is {ext} but actual format is {fmt}!',
+        'warning_format_mismatch_short': 'Format mismatch',
         'warning_low_jpeg': '⚠️  JPEG quality is low',
         'warning_low_resolution': '⚠️  Resolution is low, recommend at least {min_w}x{min_h} for commercial use',
         'error_cannot_open': '❌ {filename}: Cannot open - {error}',
+        'error_cannot_open_short': 'Cannot open',
         'summary': 'Summary',
         'warnings_found': '⚠️  Found {count} issue(s):',
         'recommend_fix': 'Recommendation: Fix the above issues before publishing.',
@@ -67,9 +69,11 @@ MESSAGES = {
         'genuine_png': '✅ 真正的PNG无损格式',
         'uncompressed_size': '未压缩大小',
         'warning_format_mismatch': '⚠️  警告: 扩展名是 {ext} 但实际是 {fmt}!',
+        'warning_format_mismatch_short': '格式不匹配',
         'warning_low_jpeg': '⚠️  JPEG质量偏低',
         'warning_low_resolution': '⚠️  分辨率偏低，建议商用素材至少 {min_w}x{min_h}',
         'error_cannot_open': '❌ {filename}: 无法打开 - {error}',
+        'error_cannot_open_short': '无法打开',
         'summary': '汇总',
         'warnings_found': '⚠️  发现 {count} 个问题:',
         'recommend_fix': '建议: 在上架销售前解决以上问题。',
@@ -113,7 +117,7 @@ def detect_language(args_lang=None):
             # For most other locales, default to English
             if system_locale.startswith('en') or system_locale.startswith('EN'):
                 return 'en'
-    except:
+    except Exception:
         pass
     
     # Priority 4: Check LANG environment variable as fallback
@@ -218,7 +222,7 @@ def write_report_file(results, warnings, folder, lang):
             
             for r in results:
                 if 'error' in r:
-                    f.write(f"{r['filename']}: {msg('error_cannot_open', lang, filename='', error=r['error']).replace('❌ : ', '')}\n")
+                    f.write(f"{r['filename']}: {msg('error_cannot_open_short', lang)} - {r['error']}\n")
                     continue
                 
                 f.write(f"{r['filename']}\n")
@@ -227,7 +231,7 @@ def write_report_file(results, warnings, folder, lang):
                 f.write(f"  {msg('extension', lang)}: {r['extension']} / {msg('real_format', lang)}: {r['real_format']}\n")
                 
                 if r.get('format_mismatch'):
-                    f.write(f"  ⚠️ {msg('warning_format_mismatch', lang, ext='', fmt='').split(':')[0]}!\n")
+                    f.write(f"  ⚠️ {msg('warning_format_mismatch_short', lang)}!\n")
                 
                 if r.get('jpeg_quality_label'):
                     f.write(f"  {msg('jpeg_quality', lang)}: {r['jpeg_quality_label']}\n")

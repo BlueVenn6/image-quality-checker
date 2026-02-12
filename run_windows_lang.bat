@@ -1,7 +1,7 @@
 @echo off
 REM Image Quality Checker - Interactive Language Selector
 REM Double-click to run with language selection
-REM Save this file as UTF-8 without BOM or ANSI encoding
+REM Save this file as UTF-8 without BOM (preferred) or ANSI encoding
 
 setlocal enabledelayedexpansion
 

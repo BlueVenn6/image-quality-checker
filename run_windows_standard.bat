@@ -1,7 +1,7 @@
 @echo off
 REM Image Quality Checker - Standard Windows Runner
 REM Can be double-clicked or used with drag-and-drop
-REM Save this file as UTF-8 without BOM or ANSI encoding
+REM Save this file as UTF-8 without BOM (preferred) or ANSI encoding
 
 setlocal enabledelayedexpansion
 
