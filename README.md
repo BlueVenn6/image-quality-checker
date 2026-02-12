@@ -57,15 +57,29 @@ pip install -r requirements.txt
 
 ## Usage / 使用方法
 
-### Option A: Run by double-click (Windows) / 双击运行（Windows）
-1. Copy `check_image_quality.py` into your image folder  
-   把脚本复制到素材图片文件夹中
-2. Double-click to run  
-   双击运行
-3. It will scan that folder and write `quality_report.txt`  
-   会扫描该文件夹并生成 `quality_report.txt`
+### Option A: Windows Batch Scripts (recommended for non-technical users) / Windows 批处理脚本（推荐非技术用户）
 
-### Option B: Command line (recommended) / 命令行（推荐）
+#### `run_windows_standard.bat`
+Simple runner with minimal user interaction:
+- **Double-click**: Scans the current folder  
+  **双击运行**：扫描当前文件夹
+- **Drag-and-drop**: Drag a folder onto the .bat file to scan it  
+  **拖放**：将文件夹拖到 .bat 文件上进行扫描
+
+#### `run_windows_lang.bat`
+Interactive runner with language selection:
+- Prompts user to choose English or Chinese / 提示用户选择英文或中文
+- Asks for path to scan (defaults to current directory) / 询问扫描路径（默认当前目录）
+- Installs dependencies automatically / 自动安装依赖
+- Pauses at the end to review results / 结束时暂停以查看结果
+
+**Important / 重要**: When editing .bat files on Windows, save with **ANSI encoding or UTF-8 without BOM** to avoid character encoding issues. Most text editors have this option under "Save As" → "Encoding".  
+**重要**：在 Windows 上编辑 .bat 文件时，请使用 **ANSI 编码或 UTF-8 无 BOM** 保存，以避免字符编码问题。大多数文本编辑器在"另存为"→"编码"中都有此选项。
+
+#### Legacy `run_windows.bat`
+The original Windows runner (preserved for compatibility).
+
+### Option B: Command line (recommended for advanced users) / 命令行（推荐高级用户）
 
 #### Scan a folder / 扫描文件夹
 
@@ -124,21 +138,66 @@ image quality checker, jpeg quality estimate, format mismatch detector, magic by
 ## CLI usage
 
 ```bash
-# Human-readable report (default)
+# Human-readable report (default, auto-detect language)
 python check_image_quality.py [PATH]
 
-# JSON output (for scripts/CI)
+# JSON output (for scripts/CI, keys always in English)
 python check_image_quality.py [PATH] --json
 
-# CSV output
+# CSV output (keys always in English)
 python check_image_quality.py [PATH] --csv
 
 # Recursive scan
 python check_image_quality.py [PATH] -r
 
-# Custom thresholds
+# Custom thresholds (default: 1600x1600, min-jpeg-quality 8.0)
 python check_image_quality.py [PATH] --min-resolution 4000x4000 --min-jpeg-quality 5
+
+# Force language (en=English, zh=Chinese)
+python check_image_quality.py [PATH] --lang en
+python check_image_quality.py [PATH] --lang zh
+
+# Pause before exit (useful for Windows double-click)
+python check_image_quality.py [PATH] --pause
 ```
+
+### Language Selection / 语言选择
+
+The CLI interface language is determined by precedence:
+
+1. **`--lang` flag** (highest priority)  
+   `--lang` 参数（最高优先级）
+2. **`IQC_LANG` environment variable**  
+   环境变量 `IQC_LANG`
+3. **System locale** (auto-detect from OS)  
+   系统语言（从操作系统自动检测）
+4. **Default: Chinese** (fallback)  
+   默认值：中文（后备）
+
+Examples / 示例:
+```bash
+# Use English regardless of system locale
+export IQC_LANG=en
+python check_image_quality.py ./images
+
+# Use Chinese
+export IQC_LANG=zh
+python check_image_quality.py ./images
+
+# Override with --lang flag
+python check_image_quality.py ./images --lang en
+```
+
+**Note**: JSON and CSV outputs **always use English keys** for automation compatibility.  
+**注意**：JSON 和 CSV 输出的键名**始终使用英文**，以便自动化工具使用。
+
+### Exit Codes / 退出码
+
+| Code | Meaning / 含义 |
+|------|--------------|
+| 0 | All files passed / 所有文件通过 |
+| 1 | Warnings found / 发现警告 |
+| 2 | Runtime error / 运行时错误 |
 
 ## MCP server (for AI agents)
 
