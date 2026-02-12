@@ -1,244 +1,296 @@
+#!/usr/bin/env python3
 """
-图片质量检测工具
-===============
-用法: 把这个脚本放到你的素材文件夹里，双击运行
-或者命令行: python check_image_quality.py [文件夹路径]
+Image Quality Checker (Batch) - CLI
+====================================
+Usage:
+    python check_image_quality.py [PATH]
+    python check_image_quality.py [PATH] --json
+    python check_image_quality.py [PATH] --csv
+    python check_image_quality.py [PATH] --min-resolution 4000x4000 --min-jpeg-quality 5
+    python check_image_quality.py [PATH] --recursive --json
 
-它会检测每张图片的:
-- 真实文件格式（不看扩展名，看实际二进制数据）
-- 实际分辨率
-- 如果是JPEG，估算压缩质量
-- 文件大小
-- 是否存在"扩展名与实际格式不符"的问题
+Exit codes:
+    0  All files passed
+    1  One or more warnings found
+    2  Runtime error (path not found, etc.)
 """
 
 import os
 import sys
-from pathlib import Path
 
+# ---- Double-click detection (MUST be before any risky imports) ----
+# No args + attached to a real terminal = user double-clicked the file
+_INTERACTIVE = (len(sys.argv) <= 1) and sys.stdin is not None
 try:
-    from PIL import Image
-except ImportError:
-    print("需要安装 Pillow 库，请运行: pip install Pillow")
-    input("按回车退出...")
-    sys.exit(1)
+    _INTERACTIVE = _INTERACTIVE and sys.stdin.isatty()
+except Exception:
+    _INTERACTIVE = False
+
+# Add script's own directory to import path so image_quality_core is found
+# regardless of what the working directory is when double-clicked
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
 
 
-def get_real_format(filepath):
-    """通过读取文件头判断真实格式"""
-    with open(filepath, 'rb') as f:
-        header = f.read(16)
-    
-    if header[:3] == b'\xff\xd8\xff':
-        return "JPEG"
-    elif header[:4] == b'\x89PNG':
-        return "PNG"
-    elif header[:4] == b'RIFF' and header[8:12] == b'WEBP':
-        return "WEBP"
-    elif header[:2] == b'BM':
-        return "BMP"
-    elif header[:4] in (b'II\x2a\x00', b'MM\x00\x2a'):
-        return "TIFF"
-    else:
-        return f"未知 (hex: {header[:8].hex()})"
+def _pause_if_interactive():
+    """Pause before exit so the window stays open on double-click."""
+    if _INTERACTIVE:
+        print("")
+        input("Press Enter to exit...")
 
 
-def estimate_jpeg_quality(img):
-    """通过量化表估算JPEG压缩质量"""
-    if not hasattr(img, 'quantization') or not img.quantization:
-        return None, None
-    
-    q0 = img.quantization[0]
-    avg = sum(q0[i] for i in range(min(8, len(q0)))) / min(8, len(q0))
-    
-    if avg <= 1.5:
-        return "95-100 (极高 - 几乎无损)", avg
-    elif avg <= 3:
-        return "90-95 (很高 - 优秀)", avg
-    elif avg <= 5:
-        return "85-90 (高 - 商用合格)", avg
-    elif avg <= 8:
-        return "75-85 (中高)", avg
-    elif avg <= 16:
-        return "60-75 (中等 - 有明显压缩痕迹)", avg
-    else:
-        return "<60 (低 - 不适合商用)", avg
+# ---- Wrap everything so import errors don't cause flash-close ----
+try:
+    import argparse
+    import csv
+    import io
+    import json
+    from pathlib import Path
+
+    from image_quality_core import (
+        check_image,
+        generate_warnings,
+        scan_folder,
+        SUPPORTED_EXTENSIONS,
+    )
+except ImportError as e:
+    print("Missing dependency: {}".format(e))
+    print("")
+    print("Make sure these files are in the same folder:")
+    print("  - check_image_quality.py  (this file)")
+    print("  - image_quality_core.py")
+    print("")
+    print("Then install requirements:")
+    print("  pip install Pillow")
+    _pause_if_interactive()
+    sys.exit(2)
+except Exception as e:
+    print("Startup error: {}".format(e))
+    _pause_if_interactive()
+    sys.exit(2)
 
 
-def check_image(filepath):
-    """检测单个图片文件"""
-    file_size = os.path.getsize(filepath)
-    filename = os.path.basename(filepath)
-    extension = Path(filepath).suffix.lower()
-    real_format = get_real_format(filepath)
-    
-    # 检查扩展名与实际格式是否匹配
-    format_map = {
-        '.jpg': 'JPEG', '.jpeg': 'JPEG',
-        '.png': 'PNG',
-        '.webp': 'WEBP',
-        '.bmp': 'BMP',
-        '.tiff': 'TIFF', '.tif': 'TIFF'
-    }
-    expected_format = format_map.get(extension, "未知")
-    format_mismatch = (expected_format != real_format)
-    
+# -- Argument parsing ----------------------------------------------
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="check_image_quality",
+        description="Batch image quality checker: format sniffing, resolution, JPEG quality estimate.",
+    )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="File or folder to scan (default: current directory)",
+    )
+
+    fmt = parser.add_mutually_exclusive_group()
+    fmt.add_argument("--json", action="store_true", dest="output_json", help="Output results as JSON")
+    fmt.add_argument("--csv", action="store_true", dest="output_csv", help="Output results as CSV")
+
+    parser.add_argument(
+        "--min-resolution",
+        default="3000x3000",
+        help="Minimum resolution WxH (default: 3000x3000)",
+    )
+    parser.add_argument(
+        "--min-jpeg-quality",
+        type=float,
+        default=8.0,
+        help="Max quantization avg before warning (lower=better, default: 8.0)",
+    )
+
+    parser.add_argument("--recursive", "-r", action="store_true", help="Scan subfolders recursively")
+    parser.add_argument("--no-report", action="store_true", help="Skip writing quality_report.txt")
+
+    return parser.parse_args(argv)
+
+
+def parse_resolution(s):
     try:
-        img = Image.open(filepath)
-    except Exception as e:
-        return {
-            'filename': filename,
-            'error': str(e)
-        }
-    
-    result = {
-        'filename': filename,
-        'extension': extension,
-        'real_format': real_format,
-        'format_mismatch': format_mismatch,
-        'width': img.size[0],
-        'height': img.size[1],
-        'mode': img.mode,
-        'file_size_mb': file_size / 1024 / 1024,
-        'file_size_bytes': file_size,
+        w, h = s.lower().split("x")
+        return int(w), int(h)
+    except (ValueError, AttributeError):
+        print("Error: invalid resolution format '{}', expected WxH".format(s), file=sys.stderr)
+        sys.exit(2)
+
+
+# -- Output formatters ---------------------------------------------
+
+def output_json(results, warnings, folder):
+    payload = {
+        "scan_path": folder,
+        "file_count": len(results),
+        "warning_count": len(warnings),
+        "results": results,
+        "warnings": warnings,
     }
-    
-    if real_format == "JPEG":
-        quality_est, avg_val = estimate_jpeg_quality(img)
-        result['jpeg_quality'] = quality_est
-        result['jpeg_q_avg'] = avg_val
-    
-    if real_format == "PNG":
-        channels = 4 if img.mode == 'RGBA' else 3
-        raw_size = img.size[0] * img.size[1] * channels
-        result['is_genuine_png'] = True
-        result['uncompressed_size_mb'] = raw_size / 1024 / 1024
-    
-    return result
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
-def main():
-    # 确定要扫描的文件夹
-    if len(sys.argv) > 1:
-        folder = sys.argv[1]
-    else:
-        folder = os.path.dirname(os.path.abspath(__file__))
-    
-    if not os.path.isdir(folder):
-        # 如果传入的是文件而不是文件夹
-        if os.path.isfile(folder):
-            results = [check_image(folder)]
-            folder = os.path.dirname(folder)
-        else:
-            print(f"路径不存在: {folder}")
-            input("按回车退出...")
-            return
-    else:
-        # 扫描文件夹中的所有图片
-        extensions = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif'}
-        files = [
-            os.path.join(folder, f) 
-            for f in sorted(os.listdir(folder)) 
-            if Path(f).suffix.lower() in extensions
-        ]
-        
-        if not files:
-            print(f"在 {folder} 中没有找到图片文件")
-            input("按回车退出...")
-            return
-        
-        results = [check_image(f) for f in files]
-    
-    # 输出报告
+def output_csv(results):
+    if not results:
+        return
+    fieldnames = []
+    seen = set()
+    for r in results:
+        for k in r.keys():
+            if k not in seen:
+                fieldnames.append(k)
+                seen.add(k)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction='ignore')
+    writer.writeheader()
+    for r in results:
+        writer.writerow(r)
+    print(buf.getvalue(), end="")
+
+
+def output_human(results, warnings, folder):
     print("=" * 70)
-    print(f"  图片质量检测报告")
-    print(f"  扫描路径: {folder}")
-    print(f"  检测文件数: {len(results)}")
+    print("  Image Quality Report")
+    print("  Path: {}".format(folder))
+    print("  Files: {}".format(len(results)))
     print("=" * 70)
-    
-    warnings = []
-    
+
     for r in results:
         if 'error' in r:
-            print(f"\n❌ {r['filename']}: 无法打开 - {r['error']}")
+            print("\n[ERROR] {}: Cannot open - {}".format(r['filename'], r['error']))
             continue
-        
-        print(f"\n{'─' * 50}")
-        print(f"📄 {r['filename']}")
-        print(f"   分辨率:     {r['width']} x {r['height']} 像素")
-        print(f"   文件大小:   {r['file_size_mb']:.2f} MB ({r['file_size_bytes']:,} bytes)")
-        print(f"   颜色模式:   {r['mode']}")
-        print(f"   扩展名:     {r['extension']}")
-        print(f"   实际格式:   {r['real_format']}")
-        
-        # 格式不匹配警告
-        if r['format_mismatch']:
-            print(f"   ⚠️  警告: 扩展名是 {r['extension']} 但实际是 {r['real_format']}!")
-            warnings.append(f"{r['filename']}: 假{r['extension']}，实际是{r['real_format']}")
-        
-        # JPEG质量
-        if r.get('jpeg_quality'):
-            print(f"   JPEG质量:   {r['jpeg_quality']}")
-            if r.get('jpeg_q_avg', 999) > 8:
-                warnings.append(f"{r['filename']}: JPEG质量偏低 ({r['jpeg_quality']})")
-        
-        # PNG信息
-        if r.get('is_genuine_png'):
-            print(f"   ✅ 真正的PNG无损格式")
-            print(f"   未压缩大小: {r['uncompressed_size_mb']:.1f} MB")
-        
-        # 分辨率检查
-        if r['width'] < 3000 or r['height'] < 3000:
-            print(f"   ⚠️  分辨率偏低，建议商用素材至少 4000x4000")
-            warnings.append(f"{r['filename']}: 分辨率 {r['width']}x{r['height']} 偏低")
-    
-    # 汇总
-    print(f"\n{'=' * 70}")
-    print(f"  汇总")
-    print(f"{'=' * 70}")
-    
+
+        print("\n" + "-" * 50)
+        print("  {}".format(r['filename']))
+        print("   Resolution:  {} x {} px".format(r['width'], r['height']))
+        print("   File size:   {:.2f} MB ({:,} bytes)".format(r['file_size_mb'], r['file_size_bytes']))
+        print("   Color mode:  {}".format(r['mode']))
+        print("   Extension:   {}".format(r['extension']))
+        print("   Real format: {}".format(r['real_format']))
+
+        if r.get('format_mismatch'):
+            print("   [!] Mismatch: extension is {} but actual format is {}".format(
+                r['extension'], r['real_format']))
+
+        if r.get('jpeg_quality_label'):
+            print("   JPEG quality: {}".format(r['jpeg_quality_label']))
+
+        if r.get('png_genuine'):
+            print("   Genuine PNG (lossless)")
+            print("   Uncompressed: {:.1f} MB".format(r['png_uncompressed_mb']))
+
+    print("\n" + "=" * 70)
+    print("  Summary")
+    print("=" * 70)
+
     if warnings:
-        print(f"\n⚠️  发现 {len(warnings)} 个问题:")
+        print("\n  {} issue(s) found:".format(len(warnings)))
         for w in warnings:
-            print(f"   • {w}")
-        print(f"\n建议: 在上架销售前解决以上问题。")
+            print("   - {}: {}".format(w['filename'], w['message']))
+        print("\n  Fix these before publishing.")
     else:
-        print(f"\n✅ 所有文件检测通过，可以用于商用素材包。")
-    
-    # 保存报告到文件
+        print("\n  All files passed.")
+
+
+def write_report(results, warnings, folder):
     report_path = os.path.join(folder, "quality_report.txt")
     try:
         with open(report_path, 'w', encoding='utf-8') as f:
-            f.write(f"图片质量检测报告\n")
-            f.write(f"扫描路径: {folder}\n")
-            f.write(f"检测文件数: {len(results)}\n\n")
+            f.write("Image Quality Report\n")
+            f.write("Path: {}\n".format(folder))
+            f.write("Files: {}\n\n".format(len(results)))
             for r in results:
                 if 'error' in r:
-                    f.write(f"{r['filename']}: 错误 - {r['error']}\n")
+                    f.write("{}: error - {}\n\n".format(r['filename'], r['error']))
                     continue
-                f.write(f"{r['filename']}\n")
-                f.write(f"  分辨率: {r['width']}x{r['height']}\n")
-                f.write(f"  大小: {r['file_size_mb']:.2f} MB\n")
-                f.write(f"  扩展名: {r['extension']} / 实际: {r['real_format']}\n")
-                if r['format_mismatch']:
-                    f.write(f"  ⚠️ 格式不匹配!\n")
-                if r.get('jpeg_quality'):
-                    f.write(f"  JPEG质量: {r['jpeg_quality']}\n")
-                if r.get('is_genuine_png'):
-                    f.write(f"  ✅ 真正PNG\n")
-                f.write(f"\n")
-            
+                f.write("{}\n".format(r['filename']))
+                f.write("  Resolution: {}x{}\n".format(r['width'], r['height']))
+                f.write("  Size: {:.2f} MB\n".format(r['file_size_mb']))
+                f.write("  Extension: {} / Actual: {}\n".format(r['extension'], r['real_format']))
+                if r.get('format_mismatch'):
+                    f.write("  [!] Format mismatch\n")
+                if r.get('jpeg_quality_label'):
+                    f.write("  JPEG quality: {}\n".format(r['jpeg_quality_label']))
+                if r.get('png_genuine'):
+                    f.write("  Genuine PNG\n")
+                f.write("\n")
             if warnings:
-                f.write(f"\n问题汇总:\n")
+                f.write("Issues:\n")
                 for w in warnings:
-                    f.write(f"  • {w}\n")
-        
-        print(f"\n📋 报告已保存到: {report_path}")
-    except Exception as e:
-        print(f"\n(报告保存失败: {e})")
-    
-    input("\n按回车退出...")
+                    f.write("  - {}: {}\n".format(w['filename'], w['message']))
+        return report_path
+    except Exception:
+        return None
 
+
+# -- Main ----------------------------------------------------------
+
+def main(argv=None):
+    args = parse_args(argv)
+    min_w, min_h = parse_resolution(args.min_resolution)
+
+    target = args.path or os.getcwd()
+
+    if os.path.isfile(target):
+        results = [check_image(target)]
+        folder = os.path.dirname(os.path.abspath(target))
+    elif os.path.isdir(target):
+        results = scan_folder(target, recursive=args.recursive)
+        folder = os.path.abspath(target)
+    else:
+        print("Error: path not found: {}".format(target), file=sys.stderr)
+        sys.exit(2)
+
+    if not results:
+        if args.output_json:
+            output_json([], [], folder)
+        elif args.output_csv:
+            pass
+        else:
+            print("No image files found in {}".format(folder))
+        sys.exit(0)
+
+    warnings = generate_warnings(
+        results,
+        min_width=min_w,
+        min_height=min_h,
+        min_jpeg_quality_avg=args.min_jpeg_quality,
+    )
+
+    if args.output_json:
+        output_json(results, warnings, folder)
+    elif args.output_csv:
+        output_csv(results)
+    else:
+        output_human(results, warnings, folder)
+        if not args.no_report:
+            rp = write_report(results, warnings, folder)
+            if rp:
+                print("\nReport saved: {}".format(rp))
+
+    sys.exit(1 if warnings else 0)
+
+
+# -- Entry point ---------------------------------------------------
 
 if __name__ == "__main__":
-    main()
+    if _INTERACTIVE:
+        # Double-click mode: prompt for path, always pause before closing
+        print("")
+        print("  Image Quality Checker")
+        print("  " + "-" * 40)
+        print("")
+        _path = input("  Enter folder or file path: ").strip().strip('"')
+        if not _path:
+            print("  No path entered.")
+            _pause_if_interactive()
+            sys.exit(0)
+        try:
+            main([_path])
+        except SystemExit:
+            pass
+        except Exception as e:
+            print("\n  Error: {}".format(e))
+        _pause_if_interactive()
+    else:
+        # CLI / script / bat mode: run normally, no pause
+        main()

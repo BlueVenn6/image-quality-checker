@@ -1,13 +1,12 @@
 """
-Image Quality Checker — Core Logic
+Image Quality Checker - Core Logic
 ===================================
 Shared module used by both CLI and MCP server.
-No side effects, no I/O to stdout — pure functions that return data.
+No side effects, no I/O to stdout - pure functions that return data.
 """
 
 import os
 from pathlib import Path
-from typing import Optional
 
 try:
     from PIL import Image
@@ -15,17 +14,7 @@ except ImportError:
     raise ImportError("Pillow is required: pip install Pillow")
 
 
-# ── Format detection ──────────────────────────────────────────────
-
-MAGIC_SIGNATURES = [
-    (b'\xff\xd8\xff',                    "JPEG"),
-    (b'\x89PNG',                          "PNG"),
-    # WEBP: RIFF....WEBP
-    (None,                                "WEBP"),   # handled specially
-    (b'BM',                               "BMP"),
-    (b'II\x2a\x00',                       "TIFF"),
-    (b'MM\x00\x2a',                       "TIFF"),
-]
+# -- Format detection ----------------------------------------------
 
 EXTENSION_MAP = {
     '.jpg': 'JPEG', '.jpeg': 'JPEG',
@@ -38,7 +27,7 @@ EXTENSION_MAP = {
 SUPPORTED_EXTENSIONS = set(EXTENSION_MAP.keys())
 
 
-def get_real_format(filepath: str) -> str:
+def get_real_format(filepath):
     """Detect real file format by reading magic bytes."""
     with open(filepath, 'rb') as f:
         header = f.read(16)
@@ -53,12 +42,12 @@ def get_real_format(filepath: str) -> str:
         return "BMP"
     if header[:4] in (b'II\x2a\x00', b'MM\x00\x2a'):
         return "TIFF"
-    return f"UNKNOWN (hex: {header[:8].hex()})"
+    return "UNKNOWN (hex: {})".format(header[:8].hex())
 
 
-# ── JPEG quality estimation ──────────────────────────────────────
+# -- JPEG quality estimation ---------------------------------------
 
-def estimate_jpeg_quality(img: Image.Image) -> tuple[Optional[str], Optional[float]]:
+def estimate_jpeg_quality(img):
     """Estimate JPEG compression quality from quantization tables."""
     if not hasattr(img, 'quantization') or not img.quantization:
         return None, None
@@ -67,24 +56,24 @@ def estimate_jpeg_quality(img: Image.Image) -> tuple[Optional[str], Optional[flo
     avg = sum(q0[i] for i in range(min(8, len(q0)))) / min(8, len(q0))
 
     if avg <= 1.5:
-        label = "95-100 (very high — near lossless)"
+        label = "95-100 (very high - near lossless)"
     elif avg <= 3:
-        label = "90-95 (high — excellent)"
+        label = "90-95 (high - excellent)"
     elif avg <= 5:
-        label = "85-90 (high — commercial grade)"
+        label = "85-90 (high - commercial grade)"
     elif avg <= 8:
         label = "75-85 (medium-high)"
     elif avg <= 16:
-        label = "60-75 (medium — visible compression)"
+        label = "60-75 (medium - visible compression)"
     else:
-        label = "<60 (low — not suitable for commercial use)"
+        label = "<60 (low - not suitable for commercial use)"
 
     return label, round(avg, 2)
 
 
-# ── Single-file check ────────────────────────────────────────────
+# -- Single-file check ---------------------------------------------
 
-def check_image(filepath: str) -> dict:
+def check_image(filepath):
     """Check a single image file. Returns a dict of findings."""
     file_size = os.path.getsize(filepath)
     filename = os.path.basename(filepath)
@@ -130,9 +119,9 @@ def check_image(filepath: str) -> dict:
     return result
 
 
-# ── Batch scan ───────────────────────────────────────────────────
+# -- Batch scan ----------------------------------------------------
 
-def scan_folder(folder: str, recursive: bool = False) -> list[dict]:
+def scan_folder(folder, recursive=False):
     """Scan a folder for image files and check each one."""
     folder = os.path.abspath(folder)
 
@@ -152,14 +141,9 @@ def scan_folder(folder: str, recursive: bool = False) -> list[dict]:
     return [check_image(f) for f in files]
 
 
-# ── Warning generation ───────────────────────────────────────────
+# -- Warning generation --------------------------------------------
 
-def generate_warnings(
-    results: list[dict],
-    min_width: int = 3000,
-    min_height: int = 3000,
-    min_jpeg_quality_avg: float = 8.0,
-) -> list[dict]:
+def generate_warnings(results, min_width=3000, min_height=3000, min_jpeg_quality_avg=8.0):
     """
     Generate warnings based on configurable thresholds.
     Returns list of {filename, type, message} dicts.
@@ -171,7 +155,7 @@ def generate_warnings(
             warnings.append({
                 'filename': r['filename'],
                 'type': 'error',
-                'message': f"Cannot open: {r['error']}",
+                'message': "Cannot open: {}".format(r['error']),
             })
             continue
 
@@ -179,21 +163,21 @@ def generate_warnings(
             warnings.append({
                 'filename': r['filename'],
                 'type': 'format_mismatch',
-                'message': f"Extension {r['extension']} but actual format is {r['real_format']}",
+                'message': "Extension {} but actual format is {}".format(r['extension'], r['real_format']),
             })
 
         if r.get('jpeg_quality_avg') is not None and r['jpeg_quality_avg'] > min_jpeg_quality_avg:
             warnings.append({
                 'filename': r['filename'],
                 'type': 'low_jpeg_quality',
-                'message': f"JPEG quality low ({r['jpeg_quality_label']})",
+                'message': "JPEG quality low ({})".format(r['jpeg_quality_label']),
             })
 
         if r.get('width', 99999) < min_width or r.get('height', 99999) < min_height:
             warnings.append({
                 'filename': r['filename'],
                 'type': 'low_resolution',
-                'message': f"Resolution {r['width']}x{r['height']} below {min_width}x{min_height}",
+                'message': "Resolution {}x{} below {}x{}".format(r['width'], r['height'], min_width, min_height),
             })
 
     return warnings

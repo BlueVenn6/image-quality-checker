@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Image Quality Checker — MCP Server
+Image Quality Checker - MCP Server
 ====================================
 Exposes image quality checking as MCP tools for AI agents.
 
 Install:
-    pip install mcp[cli] Pillow
+    pip install -r requirements-mcp.txt
 
 Run (stdio, for Claude Desktop / Cursor):
     python mcp_server.py
@@ -23,10 +23,15 @@ Configure in Claude Desktop (claude_desktop_config.json):
 
 import json
 import os
-from typing import Optional
+import sys
+
+# Ensure image_quality_core.py can be found regardless of working directory.
+# Claude Desktop runs this from its own directory, not the script's.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel, Field, ConfigDict
 
 from image_quality_core import (
     check_image,
@@ -34,67 +39,15 @@ from image_quality_core import (
     generate_warnings,
 )
 
-# ── Server init ──────────────────────────────────────────────────
+# -- Server init ---------------------------------------------------
 
 mcp = FastMCP("image_quality_mcp")
 
 
-# ── Input models ─────────────────────────────────────────────────
+# -- Tools ---------------------------------------------------------
 
-class CheckImageInput(BaseModel):
-    """Input for checking a single image file."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-
-    path: str = Field(
-        ...,
-        description="Absolute path to an image file (JPEG, PNG, WEBP, BMP, TIFF)",
-        min_length=1,
-    )
-
-
-class ScanFolderInput(BaseModel):
-    """Input for batch-scanning a folder of images."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-
-    path: str = Field(
-        ...,
-        description="Absolute path to a folder containing image files",
-        min_length=1,
-    )
-    recursive: bool = Field(
-        default=False,
-        description="Whether to scan subfolders recursively",
-    )
-    min_width: int = Field(
-        default=3000,
-        description="Minimum acceptable image width in pixels",
-        ge=1,
-    )
-    min_height: int = Field(
-        default=3000,
-        description="Minimum acceptable image height in pixels",
-        ge=1,
-    )
-    min_jpeg_quality_avg: float = Field(
-        default=8.0,
-        description="Maximum quantization table average before flagging (lower = better quality, 8.0 = medium-high threshold)",
-        ge=0.0,
-    )
-
-
-# ── Tools ────────────────────────────────────────────────────────
-
-@mcp.tool(
-    name="image_quality_check_file",
-    annotations={
-        "title": "Check Single Image Quality",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
-)
-async def check_file(params: CheckImageInput) -> str:
+@mcp.tool()
+async def image_quality_check_file(path: str) -> str:
     """Check a single image file for quality issues.
 
     Detects real file format via magic bytes, measures resolution,
@@ -102,30 +55,26 @@ async def check_file(params: CheckImageInput) -> str:
     and flags extension mismatches.
 
     Args:
-        params (CheckImageInput): Contains:
-            - path (str): Absolute path to an image file
+        path: Absolute path to an image file (JPEG, PNG, WEBP, BMP, TIFF)
 
     Returns:
-        str: JSON object with image metadata and quality findings
+        JSON object with image metadata and quality findings.
     """
-    if not os.path.isfile(params.path):
-        return json.dumps({"error": f"File not found: {params.path}"})
+    if not os.path.isfile(path):
+        return json.dumps({"error": "File not found: {}".format(path)})
 
-    result = check_image(params.path)
+    result = check_image(path)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-@mcp.tool(
-    name="image_quality_scan_folder",
-    annotations={
-        "title": "Batch Scan Folder for Image Quality",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
-)
-async def scan_folder_tool(params: ScanFolderInput) -> str:
+@mcp.tool()
+async def image_quality_scan_folder(
+    path: str,
+    recursive: bool = False,
+    min_width: int = 3000,
+    min_height: int = 3000,
+    min_jpeg_quality_avg: float = 8.0,
+) -> str:
     """Batch-scan a folder of images and return quality report with warnings.
 
     Scans all supported image files (JPEG, PNG, WEBP, BMP, TIFF) in a folder.
@@ -133,30 +82,25 @@ async def scan_folder_tool(params: ScanFolderInput) -> str:
     estimates JPEG quality, and flags issues based on configurable thresholds.
 
     Args:
-        params (ScanFolderInput): Contains:
-            - path (str): Absolute path to folder
-            - recursive (bool): Scan subfolders (default: False)
-            - min_width (int): Minimum width in px (default: 3000)
-            - min_height (int): Minimum height in px (default: 3000)
-            - min_jpeg_quality_avg (float): Quantization threshold (default: 8.0)
+        path: Absolute path to a folder containing image files.
+        recursive: Whether to scan subfolders recursively. Default False.
+        min_width: Minimum acceptable image width in pixels. Default 3000.
+        min_height: Minimum acceptable image height in pixels. Default 3000.
+        min_jpeg_quality_avg: Maximum quantization table average before flagging
+            (lower = better quality, 8.0 = medium-high threshold). Default 8.0.
 
     Returns:
-        str: JSON object with:
-            - scan_path (str): Scanned folder path
-            - file_count (int): Number of files scanned
-            - warning_count (int): Number of issues found
-            - pass (bool): True if no warnings
-            - results (list): Per-file quality data
-            - warnings (list): Issues found with filename, type, message
+        JSON object with scan_path, file_count, warning_count, pass (bool),
+        results (per-file data), and warnings (issues found).
     """
-    if not os.path.isdir(params.path):
-        return json.dumps({"error": f"Folder not found: {params.path}"})
+    if not os.path.isdir(path):
+        return json.dumps({"error": "Folder not found: {}".format(path)})
 
-    results = scan_folder(params.path, recursive=params.recursive)
+    results = scan_folder(path, recursive=recursive)
 
     if not results:
         return json.dumps({
-            "scan_path": params.path,
+            "scan_path": path,
             "file_count": 0,
             "warning_count": 0,
             "pass": True,
@@ -164,26 +108,26 @@ async def scan_folder_tool(params: ScanFolderInput) -> str:
             "warnings": [],
         })
 
-    warnings = generate_warnings(
+    warns = generate_warnings(
         results,
-        min_width=params.min_width,
-        min_height=params.min_height,
-        min_jpeg_quality_avg=params.min_jpeg_quality_avg,
+        min_width=min_width,
+        min_height=min_height,
+        min_jpeg_quality_avg=min_jpeg_quality_avg,
     )
 
     payload = {
-        "scan_path": params.path,
+        "scan_path": path,
         "file_count": len(results),
-        "warning_count": len(warnings),
-        "pass": len(warnings) == 0,
+        "warning_count": len(warns),
+        "pass": len(warns) == 0,
         "results": results,
-        "warnings": warnings,
+        "warnings": warns,
     }
 
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-# ── Entry point ──────────────────────────────────────────────────
+# -- Entry point ---------------------------------------------------
 
 if __name__ == "__main__":
     mcp.run()
