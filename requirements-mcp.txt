@@ -1,0 +1,4 @@
+# Required for MCP server integration
+Pillow
+mcp[cli]
+pydantic>=2.0
