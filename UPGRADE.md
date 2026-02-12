@@ -17,7 +17,7 @@ run_windows_lang.bat               ← NEW: Interactive language selector
 ### Breaking changes
 - `check_image_quality.py` now imports from `image_quality_core.py` — both files must be in the same directory
 - The interactive `input("按回车退出...")` pause is **removed by default** (was blocking automation). Use `--pause` flag when needed (e.g., for double-click usage)
-- Default minimum resolution changed from 3000x3000 to **1600x1600** for more practical threshold
+- Default minimum resolution changed from 3000x3000 to **1600x1600** — this reflects modern web standards (e.g., Retina displays at 2x scaling from 800x800 base) and common marketplace requirements. For high-end commercial use (large prints, 4K displays), use `--min-resolution 4000x4000`
 
 ### New CLI features
 

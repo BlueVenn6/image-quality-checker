@@ -45,7 +45,7 @@ def detect_language(lang_flag: str = None) -> str:
                 return 'en'
             elif sys_locale.startswith('zh'):
                 return 'zh'
-    except:
+    except Exception:
         pass
     
     return 'zh'  # default
@@ -329,7 +329,7 @@ def main():
     # Parse resolution threshold
     try:
         min_width, min_height = map(int, args.min_resolution.split('x'))
-    except:
+    except (ValueError, AttributeError):
         print(f"Error: Invalid --min-resolution format. Use WIDTHxHEIGHT (e.g., 1600x1600)")
         sys.exit(2)
     
