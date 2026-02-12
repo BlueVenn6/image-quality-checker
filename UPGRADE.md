@@ -4,30 +4,54 @@
 
 ### New file structure
 ```
-image_quality_core.py     ← Core logic (importable by CLI + MCP)
-check_image_quality.py    ← CLI (upgraded)
-mcp_server.py             ← NEW: MCP server for AI agents
-requirements.txt          ← Pillow only
-requirements-mcp.txt      ← Pillow + mcp[cli] + pydantic
-run_windows.bat           ← Preserved
+image_quality_core.py              ← Core logic (importable by CLI + MCP)
+check_image_quality.py             ← CLI (upgraded with i18n support)
+mcp_server.py                      ← MCP server for AI agents
+requirements.txt                   ← Pillow only
+requirements-mcp.txt               ← Pillow + mcp[cli] + pydantic
+run_windows.bat                    ← Legacy Windows runner (preserved)
+run_windows_standard.bat           ← NEW: Simple Windows runner
+run_windows_lang.bat               ← NEW: Interactive language selector
 ```
 
 ### Breaking changes
 - `check_image_quality.py` now imports from `image_quality_core.py` — both files must be in the same directory
-- The interactive `input("按回车退出...")` pause is **removed** (was blocking automation). Windows users still have `run_windows.bat` with `pause`
+- The interactive `input("按回车退出...")` pause is **removed by default** (was blocking automation). Use `--pause` flag when needed (e.g., for double-click usage)
+- Default minimum resolution changed from 3000x3000 to **1600x1600** — this reflects modern web standards (e.g., Retina displays at 2x scaling from 800x800 base) and common marketplace requirements. For high-end commercial use (large prints, 4K displays), use `--min-resolution 4000x4000`
 
 ### New CLI features
 
+#### i18n Support (English + Chinese)
 ```bash
-# JSON output (for AI agents / scripts)
-python check_image_quality.py ./images --json
+# Language selection precedence: --lang > IQC_LANG env > locale > default zh
+python check_image_quality.py ./images --lang en
+python check_image_quality.py ./images --lang zh
 
-# CSV output (for spreadsheets / pipelines)
-python check_image_quality.py ./images --csv
+# Use environment variable
+export IQC_LANG=en
+python check_image_quality.py ./images
+```
+
+**Important**: JSON and CSV outputs **always use English keys** for automation compatibility, regardless of language setting.
+
+#### Pause flag
+```bash
+# Wait for user input before exiting (useful for double-click)
+python check_image_quality.py ./images --pause
+```
+
+#### Updated thresholds
+```bash
+# Default resolution: 1600x1600 (was 3000x3000)
+python check_image_quality.py ./images
 
 # Custom thresholds
 python check_image_quality.py ./images --min-resolution 4000x4000 --min-jpeg-quality 5
+```
 
+#### Other features (from v2.0.0)
+
+```bash
 # Recursive scan
 python check_image_quality.py ./images --recursive
 
@@ -37,6 +61,22 @@ python check_image_quality.py ./images --no-report
 # Combine: strict thresholds + JSON + recursive
 python check_image_quality.py ./images -r --json --min-resolution 4000x4000
 ```
+
+### Windows Runners
+
+#### `run_windows_standard.bat` (NEW)
+- Minimal robust runner for double-click or drag-and-drop
+- Changes to script directory automatically
+- Optional dependency installation (commented by default)
+- No blocking prompts (can uncomment pause if needed)
+
+#### `run_windows_lang.bat` (NEW)
+- Interactive language selector (English or Chinese)
+- Prompts for scan path with default to current directory
+- Automatically installs dependencies
+- Uses `--pause` flag to keep window open
+
+**Important**: Save .bat files with **ANSI encoding or UTF-8 without BOM** to prevent character encoding issues on Windows.
 
 ### Exit codes (for CI/CD)
 | Code | Meaning |
